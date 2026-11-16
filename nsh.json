@@ -1,0 +1,64 @@
+{
+  "name": "LeBox",
+  "id": "dev.lebox.client",
+  "version": "1.0.0",
+  "build": 1,
+  "theme": "theme.json",
+  "window": {
+    "title": "LeBox · sing-box 客户端",
+    "defaultSize": {
+      "width": 1080,
+      "height": 760
+    },
+    "minSize": {
+      "width": 360,
+      "height": 560
+    }
+  },
+  "capabilities": {
+    "fs": {
+      "read": [
+        "${dataDir}",
+        "${pluginDir}",
+        "${homeDir}"
+      ],
+      "write": [
+        "${dataDir}"
+      ]
+    },
+    "process": {
+      "execute": [
+        "sing-box",
+        "sing-box.exe",
+        "curl",
+        "curl.exe",
+        "tar",
+        "tar.exe",
+        "powershell",
+        "powershell.exe",
+        "env",
+        "cp",
+        "chmod"
+      ]
+    },
+    "network": {
+      "hosts": [
+        "127.0.0.1",
+        "localhost",
+        "[::1]",
+        "api.github.com",
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com"
+      ]
+    },
+    "openUrl": {
+      "schemes": [
+        "https"
+      ]
+    },
+    "statusBar": true,
+    "clipboard": true,
+    "picker": true
+  }
+}

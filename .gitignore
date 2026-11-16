@@ -1,0 +1,4 @@
+.nsh/
+target/
+dist/
+keys/*.secret
