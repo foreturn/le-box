@@ -1,4 +1,4 @@
-import { Scroll, signal, Text, View } from "nsh";
+import { List, Scroll, signal, Text, View } from "nsh";
 import {
   Button,
   Dialog,
@@ -14,6 +14,12 @@ import {
 } from "nsh/base";
 import { getSafeInsets, isCompactLayout, isNarrowPhone } from "../core/layout";
 import { getProtocolMeta, validateNodeProfile } from "../core/nodeProtocols";
+import {
+  filterAndSortQuickSwitchNodes,
+  selectQuickPillNodes,
+  type QuickSwitchSort,
+  type QuickSwitchTransportFilter,
+} from "../core/nodeSwitching";
 import { formatBytes } from "../services/runtime";
 import { CLS } from "../styles";
 import type {
@@ -91,6 +97,9 @@ export function DashboardPage(props: {
 }) {
   const switchDialogOpen = signal(false);
   const nodeSearch = signal("");
+  const transportFilter = signal<QuickSwitchTransportFilter>("all");
+  const onlyAvailable = signal(false);
+  const sortBy = signal<QuickSwitchSort>("default");
   const statusMeta = () => STATE_LABEL[props.runState()];
   const isBusy = () =>
     props.runState() === "checking" || props.runState() === "starting" || props.runState() === "stopping";
@@ -104,80 +113,184 @@ export function DashboardPage(props: {
   };
   const hasErrors = () => activeIssues().some((i) => i.severity === "error");
 
-  const quickPills = () => props.profiles().slice(0, 6);
+  const openSwitchDialog = () => {
+    nodeSearch.set("");
+    transportFilter.set("all");
+    onlyAvailable.set(false);
+    sortBy.set("default");
+    switchDialogOpen.set(true);
+  };
+
+  const resetDialogFilters = () => {
+    nodeSearch.set("");
+    transportFilter.set("all");
+    onlyAvailable.set(false);
+  };
+
+  const quickPills = () =>
+    selectQuickPillNodes(props.profiles(), props.activeProfileId(), props.delays(), 8);
+
+  const hasMixedTransport = () =>
+    props.profiles().some((p) => p.quic) && props.profiles().some((p) => !p.quic);
+
+  const testedOkCount = () =>
+    props.profiles().filter((p) => typeof props.delays()[p.id] === "number").length;
 
   const filteredDialogNodes = () => {
-    const query = nodeSearch().trim().toLowerCase();
-    if (!query) return props.profiles();
-    return props.profiles().filter(
-      (node) =>
-        node.name.toLowerCase().includes(query) ||
-        node.server.toLowerCase().includes(query) ||
-        node.tag.toLowerCase().includes(query),
+    return filterAndSortQuickSwitchNodes(props.profiles(), {
+      query: nodeSearch(),
+      transport: transportFilter(),
+      onlyAvailable: onlyAvailable(),
+      sortBy: sortBy(),
+      delays: props.delays(),
+    });
+  };
+
+  const renderQuickNodeItem = (item: () => NodeProfile) => {
+    const selected = () => props.activeProfileId() === item().id;
+    const delayState = () => props.delays()[item().id];
+    return (
+      <Button
+        testID={`quick-node-item-${item().id}`}
+        accessibilityLabel={`选择节点 ${item().name}`}
+        onPress={() => {
+          props.onSelectActive(item().id);
+          switchDialogOpen.set(false);
+        }}
+        class={`w-full flex-row items-center justify-between gap-2 rounded-[10px] border px-3 py-2 transition-colors ${
+          selected()
+            ? "border-primary bg-primary/10"
+            : "border-border bg-card hover:bg-muted/50"
+        }`}
+      >
+        <View class="min-w-0 flex-1 gap-0.5">
+          <Text
+            class={`line-clamp-1 text-[13px] font-semibold ${selected() ? "text-primary" : "text-foreground"}`}
+          >
+            {item().name}
+          </Text>
+          <Text class="line-clamp-1 font-mono text-[11px] text-muted-foreground">
+            {`${getProtocolMeta(item().protocol ?? "naive").badge} · ${item().quic ? "QUIC" : "H2"} · ${item().server}:${item().serverPort}`}
+          </Text>
+        </View>
+
+        <View class="shrink-0 flex-row items-center gap-1.5">
+          <If when={delayState() !== undefined}>
+            <View
+              class={
+                delayState() === "testing"
+                  ? CLS.badgeNeutral
+                  : delayState() === "error"
+                    ? CLS.badgeDanger
+                    : CLS.badgeSuccess
+              }
+            >
+              <Text
+                class={`font-mono text-[10px] font-medium ${
+                  delayState() === "testing"
+                    ? "text-muted-foreground"
+                    : delayState() === "error"
+                      ? "text-destructive"
+                      : "text-success"
+                }`}
+              >
+                {delayState() === "testing"
+                  ? "测速中"
+                  : delayState() === "error"
+                    ? "超时"
+                    : `${String(delayState())}ms`}
+              </Text>
+            </View>
+          </If>
+          <If when={selected()}>
+            <View class={CLS.badgeSuccess}>
+              <Text class="text-[10px] font-semibold text-success">使用中</Text>
+            </View>
+          </If>
+        </View>
+      </Button>
     );
   };
+
+  const renderEmptyNodes = () => (
+    <View class="items-center justify-center gap-2 rounded-[12px] border border-border bg-muted/40 py-8">
+      <Text class="text-xs text-muted-foreground">没有匹配的节点</Text>
+      <If when={Boolean(nodeSearch().trim()) || transportFilter() !== "all" || onlyAvailable()}>
+        <Button
+          testID="reset-quick-filter-btn"
+          accessibilityLabel="重置筛选条件"
+          onPress={resetDialogFilters}
+          class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnOutline}`}
+        >
+          <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>重置筛选</Text>
+        </Button>
+      </If>
+    </View>
+  );
 
   return (
     <View class="flex-1">
       <Scroll class="flex-1">
       <View class="gap-3.5 pb-6">
         <View class={`${CLS.heroCard} gap-3.5`}>
-          <View class={compact() ? "gap-3" : "flex-row items-center justify-between gap-4"}>
-            <View class="min-w-0 flex-1 gap-1">
-              <View class="flex-row flex-wrap items-center gap-2">
-                <Text class="text-base font-semibold text-foreground">sing-box 核心引擎</Text>
-                <View class={statusMeta().boxCls}>
-                  <Text class={`text-[11px] font-medium ${statusMeta().textCls}`}>{statusMeta().label}</Text>
-                </View>
-                <If when={props.corePid() !== null}>
-                  <View class={CLS.badgeNeutral}>
-                    <Text class="text-[11px] font-medium text-muted-foreground">
-                      {`PID ${String(props.corePid())}`}
-                    </Text>
+          <If when={!compact()}>
+            <View class="flex-row items-center justify-between gap-4">
+              <View class="min-w-0 flex-1 gap-1">
+                <View class="flex-row flex-wrap items-center gap-2">
+                  <Text class="text-base font-semibold text-foreground">sing-box 核心引擎</Text>
+                  <View class={statusMeta().boxCls}>
+                    <Text class={`text-[11px] font-medium ${statusMeta().textCls}`}>{statusMeta().label}</Text>
                   </View>
+                  <If when={props.corePid() !== null}>
+                    <View class={CLS.badgeNeutral}>
+                      <Text class="text-[11px] font-medium text-muted-foreground">
+                        {`PID ${String(props.corePid())}`}
+                      </Text>
+                    </View>
+                  </If>
+                </View>
+                <Text class="text-xs text-muted-foreground">
+                  {`内核状态: ${props.coreVersion() || "尚未探测，点击启动或进入设置检测"}`}
+                </Text>
+              </View>
+
+              <View class="flex-row items-center gap-2">
+                <If when={isRunning()}>
+                  <Button
+                    testID="restart-core-btn"
+                    accessibilityLabel="重启内核"
+                    disabled={isBusy()}
+                    onPress={props.onRestart}
+                    class={`${CLS.btnBase} ${CLS.btnLg} ${CLS.btnOutline}`}
+                  >
+                    <Text class={`text-sm font-medium ${CLS.btnTextFg}`}>重启</Text>
+                  </Button>
+                  <Button
+                    testID="stop-core-btn"
+                    accessibilityLabel="停止运行"
+                    disabled={isBusy()}
+                    onPress={props.onStop}
+                    class={`${CLS.btnBase} ${CLS.btnLg} ${CLS.btnDanger}`}
+                  >
+                    <Text class={`text-sm font-semibold ${CLS.btnTextDanger}`}>断开连接</Text>
+                  </Button>
+                </If>
+                <If when={!isRunning()}>
+                  <Button
+                    testID="start-core-btn"
+                    accessibilityLabel="启动连接"
+                    disabled={isBusy() || !props.activeProfile() || hasErrors()}
+                    onPress={props.onStart}
+                    class={`${CLS.btnBase} ${CLS.btnLg} ${CLS.btnPrimary} min-w-[148px]`}
+                  >
+                    <Text class={`text-sm font-semibold ${CLS.btnTextPrimary}`}>
+                      {isBusy() ? "处理中..." : "一键启动连接"}
+                    </Text>
+                  </Button>
                 </If>
               </View>
-              <Text class="text-xs text-muted-foreground">
-                {`内核状态: ${props.coreVersion() || "尚未探测，点击启动或进入设置检测"}`}
-              </Text>
             </View>
-
-            <View class={compact() ? "flex-row gap-2" : "flex-row items-center gap-2"}>
-              <If when={isRunning()}>
-                <Button
-                  testID="restart-core-btn"
-                  accessibilityLabel="重启内核"
-                  disabled={isBusy()}
-                  onPress={props.onRestart}
-                  class={`${CLS.btnBase} ${CLS.btnLg} ${CLS.btnOutline} ${compact() ? "flex-1" : ""}`}
-                >
-                  <Text class={`text-sm font-medium ${CLS.btnTextFg}`}>重启</Text>
-                </Button>
-                <Button
-                  testID="stop-core-btn"
-                  accessibilityLabel="停止运行"
-                  disabled={isBusy()}
-                  onPress={props.onStop}
-                  class={`${CLS.btnBase} ${CLS.btnLg} ${CLS.btnDanger} ${compact() ? "flex-1" : ""}`}
-                >
-                  <Text class={`text-sm font-semibold ${CLS.btnTextDanger}`}>断开连接</Text>
-                </Button>
-              </If>
-              <If when={!isRunning()}>
-                <Button
-                  testID="start-core-btn"
-                  accessibilityLabel="启动连接"
-                  disabled={isBusy() || !props.activeProfile() || hasErrors()}
-                  onPress={props.onStart}
-                  class={`${CLS.btnBase} ${CLS.btnLg} ${CLS.btnPrimary} ${compact() ? "w-full" : "min-w-[148px]"}`}
-                >
-                  <Text class={`text-sm font-semibold ${CLS.btnTextPrimary}`}>
-                    {isBusy() ? "处理中..." : "一键启动连接"}
-                  </Text>
-                </Button>
-              </If>
-            </View>
-          </View>
+          </If>
 
           <If when={props.activeProfile()}>
             {(node) => (
@@ -222,13 +335,12 @@ export function DashboardPage(props: {
                     <Button
                       testID="quick-switch-node-btn"
                       accessibilityLabel="切换节点"
-                      onPress={() => {
-                        nodeSearch.set("");
-                        switchDialogOpen.set(true);
-                      }}
+                      onPress={openSwitchDialog}
                       class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnSecondary}`}
                     >
-                      <Text class={`text-xs font-medium ${CLS.btnTextSecondary}`}>切换</Text>
+                      <Text class={`text-xs font-medium ${CLS.btnTextSecondary}`}>
+                        {props.profiles().length > 1 ? `切换 (${props.profiles().length})` : "切换"}
+                      </Text>
                     </Button>
                   </View>
                 </View>
@@ -237,57 +349,61 @@ export function DashboardPage(props: {
                   <View class="mt-2.5 gap-1.5 border-t border-border/60 pt-2.5">
                     <View class="flex-row items-center justify-between gap-2">
                       <Text class="text-[11px] font-medium text-muted-foreground">
-                        快速切换出站 ({props.profiles().length})
+                        {props.profiles().length > 8
+                          ? `常用 / 快速切换（展示 ${quickPills().length} / ${props.profiles().length}）`
+                          : `快速切换出站 (${props.profiles().length})`}
                       </Text>
-                      <If when={props.profiles().length > 6}>
+                      <If when={props.profiles().length > 8}>
                         <Button
+                          testID="quick-switch-more-btn"
                           accessibilityLabel="查看全部节点"
-                          onPress={() => {
-                            nodeSearch.set("");
-                            switchDialogOpen.set(true);
-                          }}
+                          onPress={openSwitchDialog}
                           class={`${CLS.btnBase} h-6 rounded-[6px] px-1.5 ${CLS.btnGhost}`}
                         >
-                          <Text class="text-[11px] font-medium text-primary">全部 ›</Text>
+                          <Text class="text-[11px] font-medium text-primary">
+                            {`全部 ${props.profiles().length} 个 ›`}
+                          </Text>
                         </Button>
                       </If>
                     </View>
-                    <View class="flex-row flex-wrap gap-1.5">
-                      <Each of={quickPills()} key={(item) => item.id}>
-                        {(item) => {
-                          const selected = () => props.activeProfileId() === item().id;
-                          const delayVal = () => props.delays()[item().id];
-                          return (
-                            <Button
-                              testID={`quick-pill-${item().id}`}
-                              accessibilityLabel={`快速切换至 ${item().name}`}
-                              onPress={() => props.onSelectActive(item().id)}
-                              class={`${CLS.btnBase} h-7 rounded-full px-2.5 ${
-                                selected()
-                                  ? "border border-primary bg-primary/15"
-                                  : "border border-border bg-card hover:bg-muted"
-                              }`}
-                            >
-                              <View
-                                class={`size-1.5 rounded-full ${selected() ? "bg-primary" : "bg-muted-foreground/40"}`}
-                              />
-                              <Text
-                                class={`text-[11px] ${
-                                  selected() ? "font-semibold text-primary" : "font-medium text-foreground"
+                    <Scroll horizontal scrollbar={false}>
+                      <View class="flex-row items-center gap-1.5 py-0.5">
+                        <Each of={quickPills()} key={(item) => item.id}>
+                          {(item) => {
+                            const selected = () => props.activeProfileId() === item().id;
+                            const delayVal = () => props.delays()[item().id];
+                            return (
+                              <Button
+                                testID={`quick-pill-${item().id}`}
+                                accessibilityLabel={`快速切换至 ${item().name}`}
+                                onPress={() => props.onSelectActive(item().id)}
+                                class={`${CLS.btnBase} h-7 shrink-0 rounded-full px-2.5 ${
+                                  selected()
+                                    ? "border border-primary bg-primary/15"
+                                    : "border border-border bg-card hover:bg-muted"
                                 }`}
                               >
-                                {item().name}
-                              </Text>
-                              <If when={typeof delayVal() === "number"}>
-                                <Text class="font-mono text-[10px] text-success">
-                                  {`${String(delayVal())}ms`}
+                                <View
+                                  class={`size-1.5 shrink-0 rounded-full ${selected() ? "bg-primary" : "bg-muted-foreground/40"}`}
+                                />
+                                <Text
+                                  class={`line-clamp-1 max-w-[160px] text-[11px] ${
+                                    selected() ? "font-semibold text-primary" : "font-medium text-foreground"
+                                  }`}
+                                >
+                                  {item().name}
                                 </Text>
-                              </If>
-                            </Button>
-                          );
-                        }}
-                      </Each>
-                    </View>
+                                <If when={typeof delayVal() === "number"}>
+                                  <Text class="shrink-0 font-mono text-[10px] text-success">
+                                    {`${String(delayVal())}ms`}
+                                  </Text>
+                                </If>
+                              </Button>
+                            );
+                          }}
+                        </Each>
+                      </View>
+                    </Scroll>
                   </View>
                 </If>
               </View>
@@ -580,8 +696,8 @@ export function DashboardPage(props: {
         presentation="formSheet"
         closeOnEscape
         closeOnBackdropPress
-        backdropClass={compact() ? "bg-foreground/30 items-center justify-end p-0" : CLS.dialogBackdrop}
-        class={compact() ? CLS.sheetCard : `${CLS.dialogCard} h-[520px] max-h-[85%] max-w-[600px]`}
+        backdropClass={CLS.dialogBackdrop}
+        class={compact() ? CLS.sheetCard : `${CLS.dialogCard} h-[600px] max-h-[86%] max-w-[780px]`}
       >
         <View class="min-h-0 flex-1">
           <View class="shrink-0 flex-row items-center justify-between gap-3 border-b border-border px-5 py-3.5">
@@ -615,103 +731,190 @@ export function DashboardPage(props: {
           </View>
 
           <If when={props.profiles().length > 3}>
-            <View class="shrink-0 border-b border-border/60 px-5 py-2.5">
-              <Input
-                accessibilityLabel="搜索节点"
-                value={nodeSearch()}
-                onChange={({ value }) => nodeSearch.set(value)}
-                placeholder="搜索节点名称、服务器或 tag..."
-                class={CLS.input}
-              />
+            <View class="shrink-0 gap-2 border-b border-border/60 bg-muted/20 px-5 py-2.5">
+              <View class="flex-row items-center gap-2">
+                <Input
+                  testID="quick-switch-search"
+                  accessibilityLabel="搜索节点"
+                  value={nodeSearch()}
+                  onChange={({ value }) => nodeSearch.set(value)}
+                  placeholder="搜索节点名、服务器、端口或 tag..."
+                  class={`${CLS.input} flex-1`}
+                />
+                <If when={nodeSearch().length > 0}>
+                  <Button
+                    testID="clear-quick-search-btn"
+                    accessibilityLabel="清空搜索"
+                    onPress={() => nodeSearch.set("")}
+                    class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnOutline}`}
+                  >
+                    <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>清空</Text>
+                  </Button>
+                </If>
+              </View>
+
+              <View class="flex-row flex-wrap items-center justify-between gap-2">
+                <View class="flex-row flex-wrap items-center gap-1.5">
+                  <Button
+                    testID="filter-all-btn"
+                    accessibilityLabel="显示全部节点"
+                    onPress={() => {
+                      transportFilter.set("all");
+                      onlyAvailable.set(false);
+                    }}
+                    class={`${CLS.btnBase} h-7 rounded-[7px] px-2.5 ${
+                      transportFilter() === "all" && !onlyAvailable() ? CLS.btnPrimary : CLS.btnOutline
+                    }`}
+                  >
+                    <Text
+                      class={`text-[11px] font-medium ${
+                        transportFilter() === "all" && !onlyAvailable()
+                          ? CLS.btnTextPrimary
+                          : CLS.btnTextFg
+                      }`}
+                    >
+                      {`全部 (${props.profiles().length})`}
+                    </Text>
+                  </Button>
+                  <If when={hasMixedTransport()}>
+                    <Button
+                      testID="filter-h2-btn"
+                      accessibilityLabel="筛选 HTTP/2 节点"
+                      onPress={() =>
+                        transportFilter.set(transportFilter() === "h2" ? "all" : "h2")
+                      }
+                      class={`${CLS.btnBase} h-7 rounded-[7px] px-2.5 ${
+                        transportFilter() === "h2" ? CLS.btnPrimary : CLS.btnOutline
+                      }`}
+                    >
+                      <Text
+                        class={`text-[11px] font-medium ${
+                          transportFilter() === "h2" ? CLS.btnTextPrimary : CLS.btnTextFg
+                        }`}
+                      >
+                        HTTP/2
+                      </Text>
+                    </Button>
+                    <Button
+                      testID="filter-quic-btn"
+                      accessibilityLabel="筛选 QUIC 节点"
+                      onPress={() =>
+                        transportFilter.set(transportFilter() === "quic" ? "all" : "quic")
+                      }
+                      class={`${CLS.btnBase} h-7 rounded-[7px] px-2.5 ${
+                        transportFilter() === "quic" ? CLS.btnPrimary : CLS.btnOutline
+                      }`}
+                    >
+                      <Text
+                        class={`text-[11px] font-medium ${
+                          transportFilter() === "quic" ? CLS.btnTextPrimary : CLS.btnTextFg
+                        }`}
+                      >
+                        QUIC
+                      </Text>
+                    </Button>
+                  </If>
+                  <If when={testedOkCount() > 0}>
+                    <Button
+                      testID="filter-available-btn"
+                      accessibilityLabel="仅看已测通节点"
+                      onPress={() => onlyAvailable.set(!onlyAvailable())}
+                      class={`${CLS.btnBase} h-7 rounded-[7px] px-2.5 ${
+                        onlyAvailable() ? CLS.btnPrimary : CLS.btnOutline
+                      }`}
+                    >
+                      <Text
+                        class={`text-[11px] font-medium ${
+                          onlyAvailable() ? CLS.btnTextPrimary : CLS.btnTextFg
+                        }`}
+                      >
+                        {`已测通 (${testedOkCount()})`}
+                      </Text>
+                    </Button>
+                  </If>
+                </View>
+
+                <View class="flex-row items-center gap-1">
+                  <Button
+                    testID="sort-default-btn"
+                    accessibilityLabel="默认排序"
+                    onPress={() => sortBy.set("default")}
+                    class={`${CLS.btnBase} h-7 rounded-[7px] px-2 ${
+                      sortBy() === "default" ? CLS.btnSecondary : CLS.btnGhost
+                    }`}
+                  >
+                    <Text class="text-[11px] font-medium text-foreground">默认</Text>
+                  </Button>
+                  <Button
+                    testID="sort-delay-btn"
+                    accessibilityLabel="按延迟排序"
+                    onPress={() => sortBy.set("delay")}
+                    class={`${CLS.btnBase} h-7 rounded-[7px] px-2 ${
+                      sortBy() === "delay" ? CLS.btnSecondary : CLS.btnGhost
+                    }`}
+                  >
+                    <Text class="text-[11px] font-medium text-foreground">延迟</Text>
+                  </Button>
+                  <Button
+                    testID="sort-name-btn"
+                    accessibilityLabel="按名称排序"
+                    onPress={() => sortBy.set("name")}
+                    class={`${CLS.btnBase} h-7 rounded-[7px] px-2 ${
+                      sortBy() === "name" ? CLS.btnSecondary : CLS.btnGhost
+                    }`}
+                  >
+                    <Text class="text-[11px] font-medium text-foreground">名称</Text>
+                  </Button>
+                </View>
+              </View>
+
+              <If when={props.activeProfile()}>
+                {(activeNode) => (
+                  <View class="flex-row items-center justify-between gap-2 pt-0.5">
+                    <Text class="line-clamp-1 min-w-0 flex-1 text-[11px] text-muted-foreground">
+                      {`当前: ${activeNode().name} (${activeNode().server}:${activeNode().serverPort})`}
+                    </Text>
+                    <Text class="shrink-0 font-mono text-[11px] text-muted-foreground">
+                      {`显示 ${filteredDialogNodes().length} / ${props.profiles().length}`}
+                    </Text>
+                  </View>
+                )}
+              </If>
             </View>
           </If>
 
-          <Scroll class="min-h-0 flex-1 px-5 py-3">
-            <View class="gap-2 pb-2">
-              <If when={filteredDialogNodes().length === 0}>
-                <View class="items-center justify-center rounded-[12px] border border-border bg-muted/40 py-8">
-                  <Text class="text-xs text-muted-foreground">没有匹配的节点</Text>
-                </View>
-              </If>
-              <Each of={filteredDialogNodes()} key={(item) => item.id}>
-                {(item) => {
-                  const selected = () => props.activeProfileId() === item().id;
-                  const delayState = () => props.delays()[item().id];
-                  return (
-                    <Button
-                      testID={`quick-node-item-${item().id}`}
-                      accessibilityLabel={`选择节点 ${item().name}`}
-                      onPress={() => {
-                        props.onSelectActive(item().id);
-                        switchDialogOpen.set(false);
-                      }}
-                      class={`flex-row items-center justify-between gap-3 rounded-[12px] border p-3 transition-colors ${
-                        selected()
-                          ? "border-primary bg-primary/10"
-                          : "border-border bg-card hover:bg-muted/50"
-                      }`}
-                    >
-                      <View class="min-w-0 flex-1 gap-1">
-                        <View class="flex-row flex-wrap items-center gap-1.5">
-                          <Text class={`text-sm font-semibold ${selected() ? "text-primary" : "text-foreground"}`}>
-                            {item().name}
-                          </Text>
-                          <View class={CLS.badgePrimary}>
-                            <Text class="text-[10px] font-medium text-primary">
-                              {getProtocolMeta(item().protocol ?? "naive").badge}
-                            </Text>
-                          </View>
-                          <View class={item().quic ? CLS.badgeInfo : CLS.badgeNeutral}>
-                            <Text class={`text-[10px] font-medium ${item().quic ? "text-info" : "text-muted-foreground"}`}>
-                              {item().quic ? "QUIC" : "HTTP/2"}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text class="font-mono text-xs text-muted-foreground">
-                          {`${item().server}:${item().serverPort} · ${item().tag}`}
-                        </Text>
-                      </View>
-
-                      <View class="flex-row items-center gap-2">
-                        <If when={delayState() !== undefined}>
-                          <View
-                            class={
-                              delayState() === "testing"
-                                ? CLS.badgeNeutral
-                                : delayState() === "error"
-                                  ? CLS.badgeDanger
-                                  : CLS.badgeSuccess
-                            }
-                          >
-                            <Text
-                              class={`text-[11px] font-medium ${
-                                delayState() === "testing"
-                                  ? "text-muted-foreground"
-                                  : delayState() === "error"
-                                    ? "text-destructive"
-                                    : "text-success"
-                              }`}
-                            >
-                              {delayState() === "testing"
-                                ? "测速中..."
-                                : delayState() === "error"
-                                  ? "超时"
-                                  : `${String(delayState())} ms`}
-                            </Text>
-                          </View>
-                        </If>
-                        <If when={selected()}>
-                          <View class={CLS.badgeSuccess}>
-                            <Text class="text-[11px] font-semibold text-success">使用中</Text>
-                          </View>
-                        </If>
-                      </View>
-                    </Button>
-                  );
-                }}
-              </Each>
-            </View>
-          </Scroll>
+          <View class="min-h-0 flex-1">
+            <If
+              when={compact()}
+              else={
+                <List
+                  testID="quick-switch-list-desktop"
+                  each={filteredDialogNodes()}
+                  numColumns={2}
+                  estimatedItemSize={62}
+                  keyExtractor={(item) => item.id}
+                  contentStyle={{ paddingHorizontal: 18, paddingVertical: 12, rowGap: 8, columnGap: 8 }}
+                  empty={renderEmptyNodes}
+                  class="flex-1"
+                >
+                  {(item) => renderQuickNodeItem(item)}
+                </List>
+              }
+            >
+              <List
+                testID="quick-switch-list-mobile"
+                each={filteredDialogNodes()}
+                numColumns={1}
+                estimatedItemSize={62}
+                keyExtractor={(item) => item.id}
+                contentStyle={{ paddingHorizontal: 16, paddingVertical: 10, rowGap: 8 }}
+                empty={renderEmptyNodes}
+                class="flex-1"
+              >
+                {(item) => renderQuickNodeItem(item)}
+              </List>
+            </If>
+          </View>
 
           <View
             style={{ paddingBottom: compact() ? Math.max(getSafeInsets().bottom, 12) : 12 }}

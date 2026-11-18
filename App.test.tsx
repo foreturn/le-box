@@ -13,6 +13,8 @@ test("LeBox manages multi-protocol nodes, official sing-box rule_set routing, an
   // Switch to Nodes page
   await app.press("id:nav-nodes");
   await app.waitFor("text:节点管理");
+  expect(app.texts()).not.toContain("启用");
+  expect(app.texts()).not.toContain("已启用");
 
   // Create a new node and select NaiveProxy protocol in editor modal
   await app.press("id:create-node-btn");
@@ -73,6 +75,8 @@ test("LeBox manages multi-protocol nodes, official sing-box rule_set routing, an
   await app.press("id:nav-routing");
   await app.waitFor("text:路由规则管理");
   await app.press("id:field-ruleset-mirror");
+  await app.press("text:GitHub 官方源 (raw.githubusercontent.com)");
+  await app.press("id:field-ruleset-mirror");
   await app.press("text:jsDelivr CDN 镜像 (cdn.jsdelivr.net)");
 
   await app.press("id:open-add-rule-btn");
@@ -115,10 +119,11 @@ test("LeBox adapts to compact mobile-app layout with bottom tabs and responsive 
     safeArea: { top: 47, bottom: 34 },
   });
 
-  await app.waitFor("id:mobile-header-toggle-btn");
+  await app.waitFor("id:mobile-bottom-toggle-btn");
   await app.waitFor("id:nav-tools");
   expect(app.texts()).toContain("连接总览");
-  expect(app.texts()).toContain("一键启动连接");
+  expect(app.texts()).not.toContain("sing-box 核心引擎");
+  expect(app.texts()).not.toContain("一键启动连接");
   expect(app.texts()).toContain("规则分流");
 
   // Navigate to Nodes via bottom bar and open mobile modal sheet
@@ -148,9 +153,9 @@ test("LeBox adapts to compact mobile-app layout with bottom tabs and responsive 
   await app.waitFor("id:check-app-update-btn");
   expect(app.texts().join("\n")).toContain("移动端平台（ios）");
 
-  // Return to Dashboard
+  // Return to Dashboard and confirm bottom-center connect button remains present
   await app.press("id:nav-dashboard");
-  await app.waitFor("id:start-core-btn");
+  await app.waitFor("id:mobile-bottom-toggle-btn");
 });
 
 test("LeBox supports Android viewport and narrow desktop window switching", async () => {
@@ -159,7 +164,7 @@ test("LeBox supports Android viewport and narrow desktop window switching", asyn
     height: 915,
     platform: "android",
   });
-  await androidApp.waitFor("id:mobile-header-toggle-btn");
+  await androidApp.waitFor("id:mobile-bottom-toggle-btn");
   await androidApp.press("id:nav-settings");
   await androidApp.waitFor("text:客户端与内核设置");
   expect(androidApp.texts().join("\n")).toContain("移动端平台（android）");
@@ -169,7 +174,7 @@ test("LeBox supports Android viewport and narrow desktop window switching", asyn
     height: 780,
     platform: "windows",
   });
-  await narrowDesktop.waitFor("id:mobile-header-toggle-btn");
+  await narrowDesktop.waitFor("id:mobile-bottom-toggle-btn");
   await narrowDesktop.waitFor("id:nav-tools");
 });
 
@@ -214,8 +219,6 @@ test("LeBox supports quick node switching on Dashboard, select-first inputs, and
 
   await app.press("id:nav-settings");
   await app.waitFor("text:客户端与内核设置");
-  await app.press("text:系统本地解析 (local)");
-  await app.press("text:指定 UDP DNS");
   await app.waitFor("id:setting-local-udp-dns");
   expect(app.texts().join("\n")).toContain("223.5.5.5");
 
@@ -229,4 +232,69 @@ test("LeBox supports quick node switching on Dashboard, select-first inputs, and
   expect(configText).toContain('"domain_resolver": "dns-remote"');
   expect(configText).toContain('"connect_timeout": "10s"');
   expect(configText).toContain('"server": "223.5.5.5"');
+});
+
+test("LeBox keeps Dashboard quick switching clean with many nodes, search, filters, and active pinning", async () => {
+  const app = await open("./App.tsx", {
+    width: 1280,
+    height: 800,
+    platform: "windows",
+  });
+
+  await app.press("id:nav-nodes");
+  await app.waitFor("text:节点管理");
+  await app.press("id:open-import-btn");
+  await app.waitFor("id:import-node-dialog");
+
+  const uris = Array.from({ length: 12 }, (_, idx) => {
+    const num = String(idx + 1).padStart(2, "0");
+    const scheme = idx % 2 === 0 ? "naive+https" : "naive+quic";
+    return `${scheme}://u${num}:p${num}@node-${num}.example.com:${443 + idx}#专线节点 ${num}`;
+  }).join("\n");
+
+  await app.type("id:import-textarea", uris);
+  await app.press("id:confirm-import-btn");
+  await app.waitFor("text:专线节点 12");
+
+  await app.press("id:nav-dashboard");
+  await app.waitFor("id:quick-switch-more-btn");
+  expect(app.texts()).toContain("切换 (13)");
+  expect(app.texts()).toContain("全部 13 个 ›");
+  expect(app.texts()).toContain("常用 / 快速切换（展示 8 / 13）");
+
+  await app.press("id:quick-switch-more-btn");
+  await app.waitFor("id:quick-switch-dialog");
+  await app.waitFor("id:filter-quic-btn");
+  await app.waitFor("id:sort-name-btn");
+
+  await app.press("id:filter-quic-btn");
+  await app.type("id:quick-switch-search", "no-such-node-xyz");
+  await app.waitFor("id:reset-quick-filter-btn");
+  await app.press("id:reset-quick-filter-btn");
+
+  await app.type("id:quick-switch-search", "node-12");
+  await app.waitFor("text:显示 1 / 13");
+  await app.press("id:quick-switch-dialog >> text:专线节点 12");
+  await app.waitFor("text:node-12.example.com:454 · QUIC");
+  expect(app.texts()).toContain("专线节点 12");
+});
+
+test("LogsPage displays logs in reverse chronological order (newest first)", async () => {
+  const app = await open("./App.tsx", {
+    width: 1200,
+    height: 800,
+    platform: "windows",
+  });
+
+  await app.waitFor("id:start-core-btn");
+  await app.press("id:start-core-btn");
+  await app.press("id:nav-logs");
+  await app.waitFor("text:共记录 2 条 sing-box 与调度器输出（按时间倒序，最新在前）");
+
+  const texts = app.texts();
+  const firstIdx = texts.findIndex((t) => t.includes("正在生成并校验 sing-box 配置"));
+  const errorIdx = texts.findIndex((t) => t.includes("配置校验失败") || t.includes("启动失败"));
+  expect(firstIdx).toBeGreaterThan(-1);
+  expect(errorIdx).toBeGreaterThan(-1);
+  expect(errorIdx).toBeLessThan(firstIdx);
 });

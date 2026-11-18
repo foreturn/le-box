@@ -1,0 +1,3 @@
+-keep class com.longbridge.nsh.** { *; }
+-keep class io.nekohasekai.libbox.** { *; }
+-keep class go.** { *; }

@@ -13,6 +13,7 @@ import {
   TUN_MTU_OPTIONS,
 } from "../core/singboxConfig";
 import type { SingBoxReleaseInfo } from "../core/updater";
+import { getHostVpnInfo, isNativeHostAvailable } from "../services/nativeHost";
 import { formatBytes, probeSingBoxVersion } from "../services/runtime";
 import {
   applyAppPackageHotUpdate,
@@ -147,9 +148,25 @@ export function SettingsPage(props: {
     });
   };
 
+  const hostCoreReady = () => !platform.desktop && isNativeHostAvailable();
+
   const handleProbe = async () => {
     probing.set(true);
     try {
+      if (hostCoreReady()) {
+        const info = await getHostVpnInfo();
+        probeOutput.set({
+          ok: info.available,
+          text: `${info.engine} ${info.version} (${info.platform})`,
+        });
+        props.onVersionDetected({
+          version: info.version,
+          origin: "bundled",
+          resolvedPath: `native:${info.engine}`,
+        });
+        props.onToast(`检测到原生内核 ${info.version}`, "success");
+        return;
+      }
       const res = await probeSingBoxVersion(props.settings().singBoxPath);
       probeOutput.set({ ok: res.ok, text: res.raw });
       if (res.ok) {
@@ -348,12 +365,12 @@ export function SettingsPage(props: {
               <Button
                 testID="probe-singbox-btn"
                 accessibilityLabel="检测内核版本"
-                disabled={!platform.desktop || probing() || updatingCore()}
+                disabled={(!platform.desktop && !hostCoreReady()) || probing() || updatingCore()}
                 onPress={() => void handleProbe()}
                 class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnOutline}`}
               >
                 <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>
-                  {probing() ? "探测中..." : "检测本地版本"}
+                  {probing() ? "探测中..." : hostCoreReady() ? "检测 libbox" : "检测本地版本"}
                 </Text>
               </Button>
               <Button
@@ -371,9 +388,11 @@ export function SettingsPage(props: {
           </View>
 
           <If when={!platform.desktop}>
-            <View class="rounded-[10px] border border-info/40 bg-info/10 px-3 py-2">
+            <View class={`rounded-[10px] border px-3 py-2 ${hostCoreReady() ? "border-success/40 bg-success/10" : "border-info/40 bg-info/10"}`}>
               <Text class="text-xs text-foreground">
-                当前运行在移动端平台（{platform.os}）；本地节点、路由规则与 sing-box 配置均会持久化保存，实际启动隧道与内核替换需通过原生 libbox 扩展集成。
+                {hostCoreReady()
+                  ? `移动端平台（${platform.os}）已挂载原生宿主内核（libbox + VpnService），节点切换与规则配置将直接下发至系统 VPN 服务。`
+                  : `当前运行在${platform.os === "web" ? "浏览器预览" : `移动端平台（${platform.os}）`}；本地节点、路由规则与配置均可管理导出，实际拉起隧道需运行在桌面端或接入 libbox 的 Android 原生壳中。`}
               </Text>
             </View>
           </If>

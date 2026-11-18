@@ -184,7 +184,7 @@ export function NodeEditorModal(props: {
         filters: [{ name: "PEM / Config", extensions: ["pem", "crt", "cer", "txt", "ech", "conf"] }],
       });
       const first = files[0];
-      if (!first) return;
+      if (!first?.file) return;
       const content = await first.file.text();
       updateDraft((cur) => {
         if (target === "cert") {

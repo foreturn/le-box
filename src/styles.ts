@@ -40,9 +40,9 @@ export const CLS = {
   selectItem: "group flex-row items-center rounded-[8px] px-2.5 py-2 focus:bg-accent selected:bg-accent",
   selectItemText: "text-xs text-popover-foreground group-selected:font-semibold group-selected:text-accent-foreground",
 
-  dialogBackdrop: "bg-foreground/30 items-center justify-center p-4",
-  dialogCard: "max-h-[90%] w-full overflow-hidden rounded-[16px] border border-border bg-card shadow-xl",
-  sheetCard: "h-[92%] max-h-[92%] w-full overflow-hidden rounded-t-[18px] border-t border-border bg-card shadow-xl",
+  dialogBackdrop: "bg-foreground/35",
+  dialogCard: "m-auto max-h-[90%] w-[92%] overflow-hidden rounded-[16px] border border-border bg-card shadow-xl",
+  sheetCard: "mt-auto h-[90%] max-h-[92%] w-full overflow-hidden rounded-t-[18px] border-t border-border bg-card shadow-xl",
 
   togglePill: "group h-8 rounded-[8px] border border-border bg-transparent px-2.5 flex-row items-center justify-center hover:bg-muted aria-pressed:border-primary aria-pressed:bg-accent",
   togglePillText: "text-xs font-medium text-foreground group-aria-pressed:font-semibold group-aria-pressed:text-accent-foreground",

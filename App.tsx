@@ -13,6 +13,16 @@ import { NodesPage } from "./src/pages/NodesPage";
 import { RoutingPage } from "./src/pages/RoutingPage";
 import { SettingsPage } from "./src/pages/SettingsPage";
 import {
+  getHostVpnInfo,
+  getHostVpnStats,
+  isNativeHostAvailable,
+  selectHostOutbound,
+  startHostVpn,
+  stopHostVpn,
+  subscribeHostVpnEvents,
+  testHostOutboundDelay,
+} from "./src/services/nativeHost";
+import {
   bootstrapBundledSingBox,
   closeAllClashConnections,
   fetchClashConnections,
@@ -53,16 +63,23 @@ const DESKTOP_NAV_ITEMS: { id: NavPageId; label: string; testID: string }[] = [
   { id: "settings", label: "系统设置", testID: "nav-settings" },
 ];
 
-const MOBILE_TABS: {
-  id: "dashboard" | "nodes" | "routing" | "tools" | "settings";
+const MOBILE_LEFT_TABS: {
+  id: "dashboard" | "nodes";
   label: string;
   glyph: string;
   testID: string;
 }[] = [
   { id: "dashboard", label: "首页", glyph: "◉", testID: "nav-dashboard" },
   { id: "nodes", label: "节点", glyph: "◈", testID: "nav-nodes" },
+];
+
+const MOBILE_RIGHT_TABS: {
+  id: "routing" | "settings";
+  label: string;
+  glyph: string;
+  testID: string;
+}[] = [
   { id: "routing", label: "路由", glyph: "⇄", testID: "nav-routing" },
-  { id: "tools", label: "工具", glyph: "⌘", testID: "nav-tools" },
   { id: "settings", label: "设置", glyph: "⚙", testID: "nav-settings" },
 ];
 
@@ -107,10 +124,13 @@ function App() {
 
   const runState = signal<CoreRunState>("stopped");
   const coreError = signal<string | null>(null);
+  const hasHostCore = () => !isDesktopAvailable && isNativeHostAvailable();
   const coreVersion = signal<string>(
     isDesktopAvailable
       ? "等待探测"
-      : "移动端模式（配置同步就绪，隧道启动需接入原生 libbox）",
+      : hasHostCore()
+        ? "等待探测 libbox"
+        : "配置预览模式（需桌面内核或原生 libbox 宿主）",
   );
   const corePid = signal<number | null>(null);
   const coreOrigin = signal<CoreBinaryOrigin>("path");
@@ -193,6 +213,24 @@ function App() {
     }
   };
 
+  const unsubscribeHostEvents = hasHostCore()
+    ? subscribeHostVpnEvents({
+        onState: (nextState, errMsg) => {
+          runState.set(nextState);
+          coreError.set(errMsg ?? null);
+          if (nextState === "stopped") {
+            stats.set({ up: 0, down: 0, connections: 0, memoryBytes: 0 });
+            connections.set([]);
+          }
+        },
+        onLog: appendLog,
+        onStats: (payload) => {
+          stats.set(payload.stats);
+          connections.set(payload.connections);
+        },
+      })
+    : () => {};
+
   void (async () => {
     const loaded = await loadPersistedState();
     profiles.set(loaded.profiles);
@@ -201,11 +239,37 @@ function App() {
     if (isDesktopAvailable) {
       await bootstrapBundledSingBox();
       await refreshCoreProbe(loaded.settings.singBoxPath);
+    } else if (hasHostCore()) {
+      try {
+        const info = await getHostVpnInfo();
+        coreOrigin.set("bundled");
+        coreResolvedPath.set(`native:${info.engine}`);
+        coreVersion.set(info.version || "libbox");
+        if (info.running) {
+          runState.set("running");
+        } else if (info.error) {
+          coreError.set(info.error);
+        }
+      } catch {
+        coreVersion.set("libbox 宿主待就绪");
+      }
     }
   })();
 
   const pollTimer = setInterval(() => {
-    if (runState() !== "running" || !settings().clashApi.enabled) return;
+    if (runState() !== "running") return;
+    if (hasHostCore()) {
+      void getHostVpnStats()
+        .then((res) => {
+          stats.set(res.stats);
+          connections.set(res.connections);
+        })
+        .catch(() => {
+          // Host stats optional when event stream is active
+        });
+      return;
+    }
+    if (!settings().clashApi.enabled) return;
     void fetchClashConnections(settings())
       .then((res) => {
         stats.set(res.stats);
@@ -229,6 +293,7 @@ function App() {
   cleanup(() => {
     clearInterval(toastTimer);
     clearInterval(pollTimer);
+    unsubscribeHostEvents();
     toastManager.dispose();
     void controller.stop();
   });
@@ -245,8 +310,33 @@ function App() {
   };
 
   const handleStart = async () => {
+    if (hasHostCore()) {
+      runState.set("starting");
+      coreError.set(null);
+      try {
+        const res = await startHostVpn(profiles(), activeProfileId(), settings());
+        if (res.version) {
+          coreVersion.set(res.version);
+        }
+        if (res.ok) {
+          runState.set("running");
+          pushToast("已请求原生 VPN 隧道启动", "success");
+        } else {
+          const msg = res.error || "原生 libbox 启动失败";
+          runState.set("error");
+          coreError.set(msg);
+          pushToast(msg, "error");
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        runState.set("error");
+        coreError.set(msg);
+        pushToast(`启动原生 VPN 失败: ${msg}`, "error");
+      }
+      return;
+    }
     if (!isDesktopAvailable) {
-      pushToast("当前移动端壳尚未接入原生 libbox VPN 扩展，可先管理节点与导出配置", "warning");
+      pushToast("当前环境未挂载桌面内核或原生 libbox 宿主，可先管理节点与导出配置", "warning");
       return;
     }
     await controller.start(profiles(), activeProfileId(), settings());
@@ -254,11 +344,31 @@ function App() {
   };
 
   const handleStop = async () => {
+    if (hasHostCore()) {
+      runState.set("stopping");
+      try {
+        await stopHostVpn();
+        runState.set("stopped");
+        stats.set({ up: 0, down: 0, connections: 0, memoryBytes: 0 });
+        connections.set([]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        runState.set("error");
+        coreError.set(msg);
+        pushToast(`停止原生 VPN 失败: ${msg}`, "error");
+      }
+      return;
+    }
     await controller.stop();
     corePid.set(null);
   };
 
   const handleRestart = async () => {
+    if (hasHostCore()) {
+      await handleStop();
+      await handleStart();
+      return;
+    }
     if (!isDesktopAvailable) return;
     await controller.stop();
     await controller.start(profiles(), activeProfileId(), settings());
@@ -276,6 +386,21 @@ function App() {
     }
     if (settings().routingMode === "direct") {
       pushToast(`已设定默认节点为 ${target.name}（当前为直连模式）`, "info");
+      return;
+    }
+    if (hasHostCore()) {
+      const resolvedTag = resolveNodeOutboundTags(profiles()).get(id) ?? target.tag;
+      try {
+        const ok = await selectHostOutbound(resolvedTag);
+        if (ok) {
+          pushToast(`已实时切换主出站为 ${target.name}`, "success");
+          return;
+        }
+      } catch {
+        // Fallback to full VPN reload
+      }
+      pushToast(`正在重载原生隧道以应用节点 ${target.name}...`, "info");
+      await handleRestart();
       return;
     }
     if (settings().clashApi.enabled) {
@@ -339,7 +464,9 @@ function App() {
     delays.update((d) => ({ ...d, [profile.id]: "testing" }));
     const resolvedTag = resolveNodeOutboundTags(profiles()).get(profile.id) ?? profile.tag;
     try {
-      const ms = await testNaiveDelay(settings(), resolvedTag);
+      const ms = hasHostCore()
+        ? await testHostOutboundDelay(resolvedTag)
+        : await testNaiveDelay(settings(), resolvedTag);
       delays.update((d) => ({ ...d, [profile.id]: ms }));
       pushToast(`${profile.name}: ${ms} ms`, "success");
     } catch (err) {
@@ -366,7 +493,9 @@ function App() {
       list.map(async (node) => {
         const outboundTag = tagMap.get(node.id) ?? node.tag;
         try {
-          const ms = await testNaiveDelay(settings(), outboundTag);
+          const ms = hasHostCore()
+            ? await testHostOutboundDelay(outboundTag)
+            : await testNaiveDelay(settings(), outboundTag);
           delays.update((prev) => ({ ...prev, [node.id]: ms }));
           okCount += 1;
         } catch {
@@ -580,23 +709,45 @@ function App() {
               <View class="flex-row items-center gap-2">
                 <View class="flex-row items-center gap-1.5 rounded-full border border-border bg-muted px-2.5 py-1">
                   <View
-                    class={`size-2 rounded-full ${runState() === "running" ? "bg-success" : runState() === "error" ? "bg-destructive" : "bg-muted-foreground"}`}
+                    class={`size-2 rounded-full ${
+                      runState() === "running"
+                        ? "bg-success"
+                        : runState() === "error"
+                          ? "bg-destructive"
+                          : runState() === "checking" || runState() === "starting" || runState() === "stopping"
+                            ? "bg-info"
+                            : "bg-muted-foreground"
+                    }`}
                   />
                   <Text class="text-[11px] font-medium text-foreground">
-                    {runState() === "running" ? "已连接" : "未连接"}
+                    {runState() === "running"
+                      ? "已连接"
+                      : runState() === "error"
+                        ? "启动异常"
+                        : runState() === "checking" || runState() === "starting" || runState() === "stopping"
+                          ? "处理中"
+                          : "未连接"}
                   </Text>
                 </View>
+                <If when={runState() === "running"}>
+                  <Button
+                    testID="mobile-restart-btn"
+                    accessibilityLabel="重启内核"
+                    onPress={() => void handleRestart()}
+                    class={`${CLS.btnBase} h-7 rounded-full px-2.5 ${CLS.btnOutline}`}
+                  >
+                    <Text class={`text-[11px] font-medium ${CLS.btnTextFg}`}>重启</Text>
+                  </Button>
+                </If>
                 <Button
-                  testID="mobile-header-toggle-btn"
-                  accessibilityLabel={runState() === "running" ? "断开连接" : "快速连接"}
-                  onPress={() => {
-                    if (runState() === "running") void handleStop();
-                    else void handleStart();
-                  }}
-                  class={`${CLS.btnBase} h-7 rounded-full px-3 ${runState() === "running" ? CLS.btnDanger : CLS.btnPrimary}`}
+                  testID="nav-tools"
+                  accessibilityLabel="工具"
+                  selected={activeTabGroup() === "tools"}
+                  onPress={() => navigateTo(page() === "logs" ? "logs" : "config")}
+                  class={`${CLS.btnBase} h-7 rounded-full px-2.5 ${activeTabGroup() === "tools" ? "border-primary bg-primary/15" : CLS.btnOutline}`}
                 >
-                  <Text class={`text-[11px] font-semibold ${runState() === "running" ? CLS.btnTextDanger : CLS.btnTextPrimary}`}>
-                    {runState() === "running" ? "断开" : "连接"}
+                  <Text class={`text-[11px] font-medium ${activeTabGroup() === "tools" ? "text-primary" : CLS.btnTextFg}`}>
+                    工具
                   </Text>
                 </Button>
               </View>
@@ -636,8 +787,8 @@ function App() {
             style={{ paddingBottom: Math.max(getSafeInsets().bottom, 6) }}
             class="border-t border-border bg-card px-2 pt-1.5"
           >
-            <View class="flex-row items-center justify-around gap-1">
-              <Each of={MOBILE_TABS} key={(tab) => tab.id}>
+            <View class="flex-row items-center justify-between gap-1">
+              <Each of={MOBILE_LEFT_TABS} key={(tab) => tab.id}>
                 {(tab) => {
                   const selected = () => activeTabGroup() === tab().id;
                   return (
@@ -645,14 +796,64 @@ function App() {
                       testID={tab().testID}
                       accessibilityLabel={tab().label}
                       selected={selected()}
-                      onPress={() => {
-                        const targetId = tab().id;
-                        if (targetId === "tools") {
-                          navigateTo(page() === "logs" ? "logs" : "config");
-                        } else {
-                          navigateTo(targetId);
-                        }
-                      }}
+                      onPress={() => navigateTo(tab().id)}
+                      class={`flex-1 items-center justify-center gap-0.5 rounded-[10px] py-1.5 ${selected() ? "bg-primary/10" : "bg-transparent"}`}
+                    >
+                      <Text class={`text-sm leading-4 ${selected() ? "text-primary" : "text-muted-foreground"}`}>
+                        {tab().glyph}
+                      </Text>
+                      <Text class={`text-[11px] ${selected() ? "font-semibold text-primary" : "font-medium text-muted-foreground"}`}>
+                        {tab().label}
+                      </Text>
+                    </Button>
+                  );
+                }}
+              </Each>
+
+              <Button
+                testID="mobile-bottom-toggle-btn"
+                accessibilityLabel={runState() === "running" ? "断开连接" : "启动连接"}
+                disabled={
+                  runState() === "checking" || runState() === "starting" || runState() === "stopping"
+                }
+                onPress={() => {
+                  if (runState() === "running") void handleStop();
+                  else void handleStart();
+                }}
+                class={`${CLS.btnBase} mx-1 h-10 min-w-[78px] shrink-0 rounded-full px-3.5 shadow-sm ${
+                  runState() === "running"
+                    ? CLS.btnDanger
+                    : runState() === "checking" || runState() === "starting" || runState() === "stopping"
+                      ? CLS.btnSecondary
+                      : CLS.btnPrimary
+                }`}
+              >
+                <Text
+                  class={`text-xs font-semibold ${
+                    runState() === "running"
+                      ? CLS.btnTextDanger
+                      : runState() === "checking" || runState() === "starting" || runState() === "stopping"
+                        ? CLS.btnTextSecondary
+                        : CLS.btnTextPrimary
+                  }`}
+                >
+                  {runState() === "running"
+                    ? "■ 断开"
+                    : runState() === "checking" || runState() === "starting" || runState() === "stopping"
+                      ? "处理中"
+                      : "● 连接"}
+                </Text>
+              </Button>
+
+              <Each of={MOBILE_RIGHT_TABS} key={(tab) => tab.id}>
+                {(tab) => {
+                  const selected = () => activeTabGroup() === tab().id;
+                  return (
+                    <Button
+                      testID={tab().testID}
+                      accessibilityLabel={tab().label}
+                      selected={selected()}
+                      onPress={() => navigateTo(tab().id)}
                       class={`flex-1 items-center justify-center gap-0.5 rounded-[10px] py-1.5 ${selected() ? "bg-primary/10" : "bg-transparent"}`}
                     >
                       <Text class={`text-sm leading-4 ${selected() ? "text-primary" : "text-muted-foreground"}`}>

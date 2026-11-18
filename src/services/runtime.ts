@@ -113,14 +113,26 @@ export async function loadPersistedState(): Promise<PersistedState> {
               return r;
             }),
           };
+      const parsedRevision = typeof parsed.settingsRevision === "number" ? parsed.settingsRevision : 1;
+      const shouldUpgradeLegacyDns =
+        parsedRevision < 2 &&
+        parsed.dns?.localType === "local" &&
+        !parsed.dns?.strategy;
       settings = {
         ...defaultSettings,
         ...parsed,
+        settingsRevision: Math.max(2, parsedRevision),
         mixed: { ...defaultSettings.mixed, ...(parsed.mixed ?? {}) },
         tun: { ...defaultSettings.tun, ...(parsed.tun ?? {}) },
         dns: {
           ...defaultSettings.dns,
           ...(parsed.dns ?? {}),
+          localType: shouldUpgradeLegacyDns
+            ? "udp"
+            : parsed.dns?.localType ?? defaultSettings.dns.localType,
+          strategy: shouldUpgradeLegacyDns
+            ? "prefer_ipv4"
+            : parsed.dns?.strategy ?? defaultSettings.dns.strategy,
           localServer:
             parsed.dns?.localServer && parsed.dns.localServer.trim().toLowerCase() !== "local"
               ? parsed.dns.localServer
@@ -474,10 +486,26 @@ export interface CoreCallbacks {
   onLog: (entry: Omit<LogEntry, "id">) => void;
 }
 
+const ANSI_ESCAPE_RE = /\u001b\[[0-9;]*[a-zA-Z]/g;
+
+export function stripAnsiCodes(line: string): string {
+  return line.replace(ANSI_ESCAPE_RE, "");
+}
+
 export function detectLogLevel(line: string, fallbackStream: "stdout" | "stderr"): LogEntry["level"] {
-  const lower = line.toLowerCase();
+  const clean = stripAnsiCodes(line).trim();
+  const tokenMatch = clean.match(/^(?:[+-]\d{4}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+)?(FATAL|PANIC|ERROR|WARN|INFO|DEBUG|TRACE)\b/i);
+  if (tokenMatch) {
+    const token = tokenMatch[1]!.toUpperCase();
+    if (token === "FATAL" || token === "PANIC" || token === "ERROR") return "error";
+    if (token === "WARN") return "warn";
+    if (token === "INFO") return "info";
+    return "debug";
+  }
+  const lower = clean.toLowerCase();
   if (lower.includes("fatal") || lower.includes("error")) return "error";
   if (lower.includes("warn")) return "warn";
+  if (lower.includes("info")) return "info";
   if (lower.includes("debug") || lower.includes("trace")) return "debug";
   return fallbackStream === "stderr" ? "warn" : "info";
 }
@@ -544,30 +572,29 @@ export class SingBoxController {
       );
       this.child = child;
 
+      let lastFatalHint = "";
+      const recordOutput = (stream: "stdout" | "stderr", line: string) => {
+        const clean = stripAnsiCodes(line);
+        if (!clean.trim()) return;
+        const level = detectLogLevel(clean, stream);
+        if (level === "error") {
+          lastFatalHint = clean.trim();
+        }
+        this.callbacks.onLog({
+          timestamp: new Date().toLocaleTimeString(),
+          stream,
+          level,
+          message: clean,
+        });
+      };
+
       let resolveExit: (() => void) | null = null;
       this.exitPromise = new Promise<void>((resolve) => {
         resolveExit = resolve;
       });
 
-      child.on("stdout", (line) => {
-        if (!line.trim()) return;
-        this.callbacks.onLog({
-          timestamp: new Date().toLocaleTimeString(),
-          stream: "stdout",
-          level: detectLogLevel(line, "stdout"),
-          message: line,
-        });
-      });
-
-      child.on("stderr", (line) => {
-        if (!line.trim()) return;
-        this.callbacks.onLog({
-          timestamp: new Date().toLocaleTimeString(),
-          stream: "stderr",
-          level: detectLogLevel(line, "stderr"),
-          message: line,
-        });
-      });
+      child.on("stdout", (line) => recordOutput("stdout", line));
+      child.on("stderr", (line) => recordOutput("stderr", line));
 
       child.on("exit", (res) => {
         if (this.child === child) {
@@ -582,7 +609,16 @@ export class SingBoxController {
           this.setState("error", res.error);
           this.pushSystemLog("error", `sing-box 异常退出: ${res.error}`);
         } else if (res.code !== 0) {
-          const msg = `sing-box 退出 (code=${String(res.code ?? "null")}, signal=${String(res.signal ?? "none")})`;
+          let msg = `sing-box 退出 (code=${String(res.code ?? "null")}, signal=${String(res.signal ?? "none")})`;
+          if (lastFatalHint) {
+            msg += ` · ${lastFatalHint}`;
+          }
+          if (
+            process.platform === "linux" &&
+            /operation not permitted|cap_net_admin|configure tun/i.test(lastFatalHint)
+          ) {
+            msg += ` (Linux TUN 需授权: sudo setcap cap_net_admin,cap_net_bind_service=+ep ${exec.displayPath})`;
+          }
           this.setState("error", msg);
           this.pushSystemLog("error", msg);
         } else {

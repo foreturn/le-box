@@ -173,6 +173,7 @@ export interface AppSettings {
   dns: DnsSettings;
   clashApi: ClashApiSettings;
   routing: RoutingSettings;
+  settingsRevision?: number;
   appManifestUrl?: string;
   bypassPrivateIp?: boolean;
   bypassChinaDomain?: boolean;

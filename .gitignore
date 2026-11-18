@@ -2,3 +2,9 @@
 target/
 dist/
 keys/*.secret
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/libs/*.aar
+android/app/src/main/assets/nsh/

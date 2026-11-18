@@ -16,6 +16,7 @@
     }
   },
   "capabilities": {
+    "application": true,
     "fs": {
       "read": [
         "${dataDir}",
@@ -59,6 +60,15 @@
     },
     "statusBar": true,
     "clipboard": true,
-    "picker": true
+    "picker": true,
+    "host": [
+      "vpn.getInfo",
+      "vpn.checkConfig",
+      "vpn.start",
+      "vpn.stop",
+      "vpn.selectOutbound",
+      "vpn.getStats",
+      "vpn.testDelay"
+    ]
   }
 }

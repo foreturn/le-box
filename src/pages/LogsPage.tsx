@@ -40,11 +40,14 @@ export function LogsPage(props: {
   const filteredLogs = () => {
     const lvl = filter();
     const q = keyword().trim().toLowerCase();
-    return props.logs().filter((entry) => {
-      if (lvl !== "all" && entry.level !== lvl) return false;
-      if (q && !entry.message.toLowerCase().includes(q)) return false;
-      return true;
-    });
+    return props
+      .logs()
+      .filter((entry) => {
+        if (lvl !== "all" && entry.level !== lvl) return false;
+        if (q && !entry.message.toLowerCase().includes(q)) return false;
+        return true;
+      })
+      .reverse();
   };
 
   const copyAll = async () => {
@@ -64,7 +67,7 @@ export function LogsPage(props: {
       <View class={compact() ? "gap-2.5" : "flex-row flex-wrap items-center justify-between gap-3"}>
         <View class="min-w-0 flex-1 gap-0.5">
           <Text class="text-sm font-semibold text-foreground">运行日志</Text>
-          <Text class="text-xs text-muted-foreground">{`共记录 ${props.logs().length} 条 sing-box 与调度器输出`}</Text>
+          <Text class="text-xs text-muted-foreground">{`共记录 ${props.logs().length} 条 sing-box 与调度器输出（按时间倒序，最新在前）`}</Text>
         </View>
         <View class="flex-row items-center gap-2">
           <Button

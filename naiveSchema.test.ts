@@ -242,7 +242,13 @@ describe("NaiveProxy protocol schema", () => {
     expect(route.geosite).toBe(undefined);
     expect(Array.isArray(route.rule_set)).toBe(true);
     const ruleSets = route.rule_set as Array<Record<string, unknown>>;
-    expect(ruleSets.some((rs) => rs.tag === "geosite-cn" && String(rs.url).includes("cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-cn.srs"))).toBe(true);
+    expect(ruleSets.some((rs) => rs.tag === "geosite-cn" && rs.download_detour === "direct" && String(rs.url).includes("cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-cn.srs"))).toBe(true);
+    expect(((cfg.experimental as Record<string, unknown>).cache_file as Record<string, unknown>).enabled).toBe(true);
+
+    settings.routing.ruleSetMirror = "github";
+    const githubCfg = buildSingBoxConfig([node], node.id, settings);
+    const githubRuleSets = (githubCfg.route as Record<string, unknown>).rule_set as Array<Record<string, unknown>>;
+    expect(githubRuleSets.some((rs) => rs.tag === "geosite-cn" && rs.download_detour === "proxy")).toBe(true);
     expect(ruleSets.some((rs) => rs.tag === "geoip-cn" && String(rs.url).includes("cdn.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/geoip-cn.srs"))).toBe(true);
     expect(ruleSets.some((rs) => rs.tag === "geosite-openai")).toBe(true);
     expect(ruleSets.some((rs) => rs.tag === "geosite-category-ads-all")).toBe(true);
@@ -316,5 +322,23 @@ describe("NaiveProxy protocol schema", () => {
       "api.openai.com",
       "anthropic.com",
     ]);
+  });
+
+  test("builds Android libbox config with auto tun inbound and without desktop interface_name", () => {
+    const node = createDefaultNodeProfile("naive", {
+      server: "edge.example.com",
+      serverPort: 443,
+      username: "u",
+      password: "p",
+    });
+    const settings = createDefaultSettings();
+    settings.tun.enabled = false;
+    const cfg = buildSingBoxConfig([node], node.id, settings, { platform: "android" });
+    const inbounds = cfg.inbounds as Array<Record<string, unknown>>;
+    const tun = inbounds.find((item) => item.type === "tun");
+    expect(tun).toBeDefined();
+    expect(tun?.auto_route).toBe(true);
+    expect(tun?.strict_route).toBe(true);
+    expect(tun?.interface_name).toBeUndefined();
   });
 });

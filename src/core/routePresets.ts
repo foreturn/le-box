@@ -43,7 +43,7 @@ export const RULE_SET_MIRROR_OPTIONS: { value: RuleSetMirror; title: string }[] 
 ];
 
 export const RULE_SET_DOWNLOAD_DETOUR_OPTIONS: { value: RuleSetDownloadDetour; title: string }[] = [
-  { value: "auto", title: "自动（代理模式走代理，直连模式直连）" },
+  { value: "auto", title: "自动（jsDelivr 直连，GitHub 走代理）" },
   { value: "proxy", title: "通过当前代理下载 (proxy)" },
   { value: "direct", title: "直连下载 (direct)" },
 ];
@@ -502,7 +502,7 @@ export function createDefaultRoutingSettings(): RoutingSettings {
   return applyRoutePresetScheme(
     {
       activeScheme: "bypass-cn",
-      ruleSetMirror: "github",
+      ruleSetMirror: "jsdelivr",
       downloadDetour: "auto",
       updateInterval: "1d",
       finalTarget: "proxy",

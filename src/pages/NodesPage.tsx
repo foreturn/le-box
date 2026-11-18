@@ -158,8 +158,13 @@ export function NodesPage(props: {
               return (
                 <View class={`${isActive() ? `${CLS.cardElevated} border-primary` : CLS.card}`}>
                   <View class="gap-3">
-                    <View class={compact() ? "gap-2.5" : "flex-row flex-wrap items-start justify-between gap-3"}>
-                      <View class="min-w-0 flex-1 gap-1.5">
+                    <Button
+                      testID={`select-node-${item().id}`}
+                      accessibilityLabel={`切换为主出站 ${item().name}`}
+                      onPress={() => props.onSelectActive(item().id)}
+                      class="w-full items-stretch justify-start rounded-[8px] bg-transparent p-0 text-left hover:opacity-90"
+                    >
+                      <View class="w-full gap-1.5">
                         <View class="flex-row flex-wrap items-center gap-2">
                           <Text class="text-sm font-semibold text-foreground">{item().name}</Text>
                           <View class={CLS.badgePrimary}>
@@ -203,61 +208,40 @@ export function NodesPage(props: {
                               <Text class="text-[11px] font-medium text-destructive">配置待修正</Text>
                             </View>
                           </If>
+                          <If when={delayState() !== undefined}>
+                            <View
+                              class={
+                                delayState() === "testing"
+                                  ? CLS.badgeNeutral
+                                  : delayState() === "error"
+                                    ? CLS.badgeDanger
+                                    : CLS.badgeSuccess
+                              }
+                            >
+                              <Text
+                                class={`text-[11px] font-medium ${
+                                  delayState() === "testing"
+                                    ? "text-muted-foreground"
+                                    : delayState() === "error"
+                                      ? "text-destructive"
+                                      : "text-success"
+                                }`}
+                              >
+                                {delayState() === "testing"
+                                  ? "测速中..."
+                                  : delayState() === "error"
+                                    ? "超时/不可达"
+                                    : `${String(delayState())} ms`}
+                              </Text>
+                            </View>
+                          </If>
                         </View>
 
                         <Text class="font-mono text-xs text-muted-foreground">
                           {`${item().server}:${item().serverPort}  ·  tag: ${item().tag}  ·  SNI: ${item().tls.serverName || item().server}`}
                         </Text>
                       </View>
-
-                      <View class="flex-row items-center gap-1.5">
-                        <If when={delayState() !== undefined}>
-                          <View
-                            class={
-                              delayState() === "testing"
-                                ? CLS.badgeNeutral
-                                : delayState() === "error"
-                                  ? CLS.badgeDanger
-                                  : CLS.badgeSuccess
-                            }
-                          >
-                            <Text
-                              class={`text-[11px] font-medium ${
-                                delayState() === "testing"
-                                  ? "text-muted-foreground"
-                                  : delayState() === "error"
-                                    ? "text-destructive"
-                                    : "text-success"
-                              }`}
-                            >
-                              {delayState() === "testing"
-                                ? "测速中..."
-                                : delayState() === "error"
-                                  ? "超时/不可达"
-                                  : `${String(delayState())} ms`}
-                            </Text>
-                          </View>
-                        </If>
-                        <Button
-                          testID={`select-node-${item().id}`}
-                          accessibilityLabel={isActive() ? "已启用" : "启用"}
-                          onPress={() => props.onSelectActive(item().id)}
-                          class={`${CLS.btnBase} ${CLS.btnSm} ${isActive() ? CLS.btnSuccess : CLS.btnSecondary}`}
-                        >
-                          <Text class={`text-xs font-medium ${isActive() ? CLS.btnTextSuccess : CLS.btnTextSecondary}`}>
-                            {isActive() ? "已启用" : "启用"}
-                          </Text>
-                        </Button>
-                        <Button
-                          testID={`edit-node-${item().id}`}
-                          accessibilityLabel="编辑"
-                          onPress={() => openEdit(item())}
-                          class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnOutline}`}
-                        >
-                          <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>编辑</Text>
-                        </Button>
-                      </View>
-                    </View>
+                    </Button>
 
                     <View class="flex-row flex-wrap items-center justify-between gap-2 border-t border-border pt-2.5">
                       <View class="flex-row flex-wrap items-center gap-2">
@@ -274,33 +258,41 @@ export function NodesPage(props: {
                         </If>
                       </View>
 
-                      <View class="flex-row items-center gap-1.5">
+                      <View class={`flex-row flex-wrap items-center ${compact() ? "gap-1" : "gap-1.5"}`}>
+                        <Button
+                          testID={`edit-node-${item().id}`}
+                          accessibilityLabel="编辑"
+                          onPress={() => openEdit(item())}
+                          class={`${CLS.btnBase} ${compact() ? "h-7 px-2 rounded-[7px]" : CLS.btnSm} ${CLS.btnOutline}`}
+                        >
+                          <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>编辑</Text>
+                        </Button>
                         <Button
                           accessibilityLabel="测速"
                           disabled={!props.coreRunning()}
                           onPress={() => props.onTestDelay(item())}
-                          class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnGhost}`}
+                          class={`${CLS.btnBase} ${compact() ? "h-7 px-2 rounded-[7px]" : CLS.btnSm} ${CLS.btnGhost}`}
                         >
                           <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>测速</Text>
                         </Button>
                         <Button
                           accessibilityLabel="复制 URI"
                           onPress={() => void copyUri(item())}
-                          class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnGhost}`}
+                          class={`${CLS.btnBase} ${compact() ? "h-7 px-2 rounded-[7px]" : CLS.btnSm} ${CLS.btnGhost}`}
                         >
                           <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>复制 URI</Text>
                         </Button>
                         <Button
                           accessibilityLabel="复制 JSON"
                           onPress={() => void copyOutboundJson(item())}
-                          class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnGhost}`}
+                          class={`${CLS.btnBase} ${compact() ? "h-7 px-2 rounded-[7px]" : CLS.btnSm} ${CLS.btnGhost}`}
                         >
                           <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>复制 JSON</Text>
                         </Button>
                         <Button
                           accessibilityLabel="克隆"
                           onPress={() => duplicateNode(item())}
-                          class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnGhost}`}
+                          class={`${CLS.btnBase} ${compact() ? "h-7 px-2 rounded-[7px]" : CLS.btnSm} ${CLS.btnGhost}`}
                         >
                           <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>克隆</Text>
                         </Button>
@@ -309,7 +301,7 @@ export function NodesPage(props: {
                           accessibilityLabel="删除"
                           disabled={props.profiles().length <= 1}
                           onPress={() => props.onDeleteProfile(item().id)}
-                          class={`${CLS.btnBase} ${CLS.btnSm} ${CLS.btnGhost}`}
+                          class={`${CLS.btnBase} ${compact() ? "h-7 px-2 rounded-[7px]" : CLS.btnSm} ${CLS.btnGhost}`}
                         >
                           <Text class={`text-xs font-medium ${CLS.btnTextFg}`}>删除</Text>
                         </Button>

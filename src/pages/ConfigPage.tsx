@@ -1,7 +1,9 @@
-import { Clipboard, Scroll, signal, Text, View } from "nsh";
+import { Clipboard, platform, Scroll, signal, Text, View } from "nsh";
+import { isAvailable as isDesktopAvailable } from "nsh/desktop";
 import { Button } from "nsh/base";
 import { isCompactLayout } from "../core/layout";
 import { buildSingBoxConfig } from "../core/singboxConfig";
+import { checkHostVpnConfig, isNativeHostAvailable } from "../services/nativeHost";
 import { checkSingBoxConfig, formatProcessError, writeRuntimeConfigFile } from "../services/runtime";
 import { CLS } from "../styles";
 import type { AppSettings, NodeProfile } from "../types/singbox";
@@ -17,7 +19,7 @@ export function ConfigPage(props: {
   const checkResult = signal<{ ok: boolean; output: string; path: string } | null>(null);
 
   const generatedJson = () =>
-    JSON.stringify(buildSingBoxConfig(props.profiles(), props.activeProfileId(), props.settings()), null, 2);
+    JSON.stringify(buildSingBoxConfig(props.profiles(), props.activeProfileId(), props.settings(), { platform: platform.os }), null, 2);
 
   const copyConfig = async () => {
     try {
@@ -40,6 +42,16 @@ export function ConfigPage(props: {
   const runCheck = async () => {
     checking.set(true);
     try {
+      if (!isDesktopAvailable && isNativeHostAvailable()) {
+        const res = await checkHostVpnConfig(
+          props.profiles(),
+          props.activeProfileId(),
+          props.settings(),
+        );
+        checkResult.set({ ok: res.ok, output: res.output, path: "Android libbox" });
+        props.onToast(res.ok ? "libbox 配置校验通过" : "libbox 配置校验返回错误", res.ok ? "success" : "error");
+        return;
+      }
       const res = await checkSingBoxConfig(
         props.settings().singBoxPath,
         props.profiles(),

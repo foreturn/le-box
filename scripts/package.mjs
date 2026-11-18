@@ -10,6 +10,8 @@ function parseArgs(argv) {
     appVersion: "",
     build: "",
     name: "",
+    debug: false,
+    assetsOnly: false,
     passthrough: [],
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -26,6 +28,10 @@ function parseArgs(argv) {
       args.build = argv[++i];
     } else if (token === "--name" && argv[i + 1]) {
       args.name = argv[++i];
+    } else if (token === "--debug") {
+      args.debug = true;
+    } else if (token === "--assets-only") {
+      args.assetsOnly = true;
     } else {
       args.passthrough.push(token);
     }
@@ -99,10 +105,95 @@ function repackArchiveTarGz(outDir, folderName, archiveName) {
   });
 }
 
-function packageSingleTarget(target, opts, meta) {
+function findApkRecursive(rootDir) {
+  if (!fs.existsSync(rootDir)) return null;
+  const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      const nested = findApkRecursive(full);
+      if (nested) return nested;
+    } else if (entry.isFile() && entry.name.endsWith(".apk")) {
+      return full;
+    }
+  }
+  return null;
+}
+
+function packageAndroid(opts, meta) {
   const appName = opts.name || meta.name || "LeBox";
   const version = opts.appVersion || meta.version || "1.0.0";
-  const outDir = path.resolve(opts.out, target === "all" ? "" : "");
+  const outDir = path.resolve(opts.out);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const androidRoot = path.resolve("android");
+  const assetsOut = path.join(androidRoot, "app", "src", "main", "assets", "nsh");
+  fs.rmSync(assetsOut, { recursive: true, force: true });
+  fs.mkdirSync(assetsOut, { recursive: true });
+
+  console.log(`[LeBox] Building nsh bytecode bundle into ${assetsOut}`);
+  runCmd("nsh", ["build", ".", "--release", "--out", assetsOut]);
+
+  for (const extra of ["bundle.js", "bundle.js.map"]) {
+    const extraPath = path.join(assetsOut, extra);
+    if (fs.existsSync(extraPath)) {
+      fs.unlinkSync(extraPath);
+    }
+  }
+
+  if (opts.assetsOnly) {
+    console.log(`[LeBox] Android NSH assets prepared at ${assetsOut}`);
+    return;
+  }
+
+  const libsDir = path.join(androidRoot, "app", "libs");
+  const nshAar = path.join(libsDir, "nsh.aar");
+  const libboxAar = path.join(libsDir, "libbox.aar");
+  const missing = [];
+  if (!fs.existsSync(nshAar)) missing.push(nshAar);
+  if (!fs.existsSync(libboxAar)) missing.push(libboxAar);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing Android native AAR dependencies:\n  - ${missing.join("\n  - ")}\nRun: node scripts/prepare-android-deps.mjs [--build-libbox | --libbox-aar <path>]`,
+    );
+  }
+
+  const task = opts.debug ? ":app:assembleDebug" : ":app:assembleRelease";
+  const gradlew = process.platform === "win32"
+    ? path.join(androidRoot, "gradlew.bat")
+    : path.join(androidRoot, "gradlew");
+  const gradleCmd = fs.existsSync(gradlew)
+    ? gradlew
+    : process.platform === "win32"
+      ? "gradle.bat"
+      : "gradle";
+
+  console.log(`[LeBox] Running ${gradleCmd} ${task} in ${androidRoot}`);
+  runCmd(gradleCmd, [task, "--no-daemon"], androidRoot);
+
+  const variantDir = opts.debug ? "debug" : "release";
+  const apkSearchDir = path.join(androidRoot, "app", "build", "outputs", "apk", variantDir);
+  const builtApk = findApkRecursive(apkSearchDir);
+  if (!builtApk) {
+    throw new Error(`Gradle completed but no APK found under ${apkSearchDir}`);
+  }
+
+  const suffix = opts.debug ? "android-debug" : "android";
+  const destApk = path.join(outDir, `${appName}-${version}-${suffix}.apk`);
+  fs.copyFileSync(builtApk, destApk);
+  console.log(`[LeBox] Android APK packaged -> ${destApk}`);
+}
+
+function packageSingleTarget(target, opts, meta) {
+  if (target === "android") {
+    packageAndroid(opts, meta);
+    return;
+  }
+
+  const appName = opts.name || meta.name || "LeBox";
+  const version = opts.appVersion || meta.version || "1.0.0";
+  const outDir = path.resolve(opts.out);
   fs.mkdirSync(outDir, { recursive: true });
 
   const nshArgs = ["package", "--target", target, "--out", outDir];
@@ -113,7 +204,16 @@ function packageSingleTarget(target, opts, meta) {
   nshArgs.push(...opts.passthrough);
 
   console.log(`[LeBox] Running: nsh ${nshArgs.join(" ")}`);
-  runCmd("nsh", nshArgs);
+  try {
+    runCmd("nsh", nshArgs);
+  } catch (err) {
+    if (target === "linux" && process.platform !== "linux") {
+      console.error(
+        "[LeBox] Note: nsh package --target linux must run on a Linux host (e.g. WSL2 or Linux CI) with nsh installed.",
+      );
+    }
+    throw err;
+  }
 
   const coreSpec = findCoreBinary(target, opts.arch);
   if (!coreSpec) {
@@ -183,7 +283,7 @@ const args = parseArgs(process.argv.slice(2));
 const meta = JSON.parse(fs.readFileSync(path.resolve("nsh.json"), "utf8"));
 
 if (args.target === "all") {
-  for (const t of ["windows", "macos", "linux"]) {
+  for (const t of ["windows", "macos", "linux", "android"]) {
     packageSingleTarget(t, args, meta);
   }
 } else {

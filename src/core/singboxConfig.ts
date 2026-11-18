@@ -89,8 +89,8 @@ export function createDefaultSettings(): AppSettings {
       remoteServer: "1.1.1.1",
       remoteType: "https",
       localServer: "223.5.5.5",
-      localType: "local",
-      strategy: "",
+      localType: "udp",
+      strategy: "prefer_ipv4",
     },
     clashApi: {
       enabled: true,
@@ -99,6 +99,7 @@ export function createDefaultSettings(): AppSettings {
       secret: "",
     },
     routing: createDefaultRoutingSettings(),
+    settingsRevision: 2,
   };
 }
 
@@ -163,10 +164,15 @@ export function resolveNodeOutboundTags(profiles: NodeProfile[]): Map<string, st
   return result;
 }
 
+export interface BuildSingBoxOptions {
+  platform?: string;
+}
+
 export function buildSingBoxConfig(
   profiles: NodeProfile[],
   activeProfileId: string | null,
   settings: AppSettings,
+  options?: BuildSingBoxOptions,
 ): Record<string, unknown> {
   const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0] ?? null;
   const tagMap = resolveNodeOutboundTags(profiles);
@@ -221,22 +227,26 @@ export function buildSingBoxConfig(
     inbounds.push(mixed);
   }
 
-  if (settings.tun.enabled) {
+  const isAndroidTarget = options?.platform === "android";
+  if (settings.tun.enabled || isAndroidTarget) {
     const addrs = [settings.tun.address4.trim(), settings.tun.address6.trim()].filter(Boolean);
     const tunMtu =
       Number.isInteger(settings.tun.mtu) && settings.tun.mtu >= 576 && settings.tun.mtu <= 65535
         ? settings.tun.mtu
         : 9000;
-    inbounds.push({
+    const tunInbound: Record<string, unknown> = {
       type: "tun",
       tag: settings.tun.tag.trim() || "tun-in",
-      interface_name: settings.tun.interfaceName.trim() || "LeBoxTun",
       address: addrs.length > 0 ? addrs : ["172.19.0.1/30"],
       mtu: tunMtu,
       stack: settings.tun.stack,
-      auto_route: settings.tun.autoRoute,
-      strict_route: settings.tun.strictRoute,
-    });
+      auto_route: isAndroidTarget ? true : settings.tun.autoRoute,
+      strict_route: isAndroidTarget ? true : settings.tun.strictRoute,
+    };
+    if (!isAndroidTarget) {
+      tunInbound.interface_name = settings.tun.interfaceName.trim() || "LeBoxTun";
+    }
+    inbounds.push(tunInbound);
   }
 
   const dnsServers: Record<string, unknown>[] = [];
@@ -375,9 +385,13 @@ export function buildSingBoxConfig(
     const resolvedDownloadDetour =
       routing.downloadDetour === "direct"
         ? "direct"
-        : hasProxyNodes
-          ? "proxy"
-          : "direct";
+        : routing.downloadDetour === "proxy"
+          ? hasProxyNodes
+            ? "proxy"
+            : "direct"
+          : routing.ruleSetMirror === "jsdelivr" || !hasProxyNodes
+            ? "direct"
+            : "proxy";
 
     route.rule_set = activeRuleSetTags.map((tag) => ({
       tag,
@@ -402,6 +416,11 @@ export function buildSingBoxConfig(
     route,
   };
 
+  const experimental: Record<string, unknown> = {
+    cache_file: {
+      enabled: true,
+    },
+  };
   if (settings.clashApi.enabled) {
     const clashApi: Record<string, unknown> = {
       external_controller: `${settings.clashApi.listen.trim() || "127.0.0.1"}:${normalizePort(settings.clashApi.port, 19090)}`,
@@ -409,10 +428,9 @@ export function buildSingBoxConfig(
     if (settings.clashApi.secret.trim()) {
       clashApi.secret = settings.clashApi.secret.trim();
     }
-    config.experimental = {
-      clash_api: clashApi,
-    };
+    experimental.clash_api = clashApi;
   }
+  config.experimental = experimental;
 
   return config;
 }
